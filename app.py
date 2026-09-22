@@ -780,9 +780,14 @@ tab1, tab2 = st.tabs(["📝 ТООЛЛОГО", "📊 АРХИВ"])
 with tab1:
     st.subheader("📝 Өдрийн тооллого")
 
+    if "count_date_value" not in st.session_state:
+        st.session_state.count_date_value = date.today()
+
     col_date, col_btn1, col_btn2 = st.columns([2, 1, 1])
     with col_date:
-        count_date = st.date_input("Тооллогын огноо", value=date.today())
+        count_date = st.date_input("Тооллогын огноо", key="count_date_value")
+        st.caption("💡 Доор Системийн Excel файл(ууд) оруулбал, файлын нэр/агуулгаас "
+                   "олдсон огноог энд автоматаар тохируулна.")
 
     # -----------------------------------------------------------------------------
     # Excel файлаас Ø/Х/О тоог ачаалах (гараар шивэхийн оронд)
@@ -1069,6 +1074,41 @@ with tab1:
     )
 
     if sys_files:
+        # --- Файлын нэр (эсвэл дотоод агуулга)-аас огноог автоматаар танихыг оролдоно.
+        #     Ижил файлууд байгаа цагт дахин дахин дарж бичихгүй байхын тулд
+        #     сүүлд шалгасан файлын багц (нэр+хэмжээ)-ыг session_state-д хадгална. ---
+        sys_file_fingerprint = tuple(sorted((f.name, f.size) for f in sys_files))
+        if st.session_state.get("_sys_files_fingerprint") != sys_file_fingerprint:
+            st.session_state["_sys_files_fingerprint"] = sys_file_fingerprint
+            detected_dates = []
+            for f in sys_files:
+                d = extract_date_from_filename(f.name)
+                if d is None:
+                    try:
+                        f_sheets = list_excel_sheets(f)
+                        d = extract_date_from_system_file(f, f_sheets[0])
+                    except Exception:
+                        d = None
+                if d:
+                    detected_dates.append(d)
+
+            if detected_dates:
+                date_counts = {}
+                for d in detected_dates:
+                    date_counts[d] = date_counts.get(d, 0) + 1
+                best_date = max(date_counts, key=date_counts.get)
+
+                if len(date_counts) > 1:
+                    others = ", ".join(str(d) for d in sorted(date_counts))
+                    st.toast(f"⚠️ Файлуудаас өөр өөр огноо илэрлээ ({others}). "
+                             f"Хамгийн олон давтагдсан {best_date} огноог ашиглав.", icon="⚠️")
+
+                if best_date != st.session_state.count_date_value:
+                    st.session_state.count_date_value = best_date
+                    st.toast(f"📅 Файлаас илэрсэн огноог тохирууллаа: "
+                             f"{best_date.strftime('%Y-%m-%d')}", icon="📅")
+                    st.rerun()
+
         try:
             sys_frames = []
             sys_errors = []
