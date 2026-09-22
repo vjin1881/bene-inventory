@@ -789,15 +789,21 @@ with tab1:
     # -----------------------------------------------------------------------------
     with st.expander("📥 Тооллогыг Excel файлаас ачаалах (гараар шивэхийн оронд)", expanded=False):
         st.caption(
-            "Өөрийн ажлын Excel файлаа (Код/Нэр/Өглөө/Хүргэлт/Орой/Тайлбар баганатай) upload "
-            "хийгээд баганыг доор тохируулаад ачаална. Толгой мөр, баганын байршил ямар ч "
-            "байсан автоматаар таамаглаж, шаардлагатай бол гараар засах боломжтой."
+            "Өөрийн ажлын Excel файл(ууд)аа (Код/Нэр/Өглөө/Хүргэлт/Орой/Тайлбар баганатай) upload "
+            "хийгээд баганыг доор тохируулаад ачаална. **Хэд хэдэн файл зэрэг сонговол**, эхний "
+            "файлаар тодорхойлсон баганын тохиргоог бусад бүх файлд адилхан хэрэглэнэ (баганын "
+            "нэрс ижил байх ёстой). Толгой мөр, баганын байршил файл бүрт ямар ч байсан "
+            "автоматаар таамаглаж, шаардлагатай бол гараар засах боломжтой."
         )
-        count_file = st.file_uploader("Тооллогын Excel файл", type=["xlsx", "xls"], key="count_upload")
+        count_files = st.file_uploader(
+            "Тооллогын Excel файл(ууд)", type=["xlsx", "xls"],
+            accept_multiple_files=True, key="count_upload",
+        )
 
-        if count_file is not None:
+        if count_files:
             try:
-                sheet_names = list_excel_sheets(count_file)
+                first_file = count_files[0]
+                sheet_names = list_excel_sheets(first_file)
                 if len(sheet_names) > 1:
                     default_sheet = guess_default_sheet(sheet_names)
                     sel_sheet = st.selectbox(
@@ -807,9 +813,17 @@ with tab1:
                 else:
                     sel_sheet = sheet_names[0]
 
-                df_import, header_row_idx = read_excel_with_header_guess(count_file, sel_sheet)
-                st.caption(f"'{sel_sheet}' хуудасны {header_row_idx + 1}-р мөрийг толгой мөр гэж "
-                           f"тооцож уншлаа. Эхний 5 мөр:")
+                df_import, header_row_idx = read_excel_with_header_guess(first_file, sel_sheet)
+                if len(count_files) > 1:
+                    st.caption(
+                        f"**{len(count_files)} файл сонгогдлоо.** '{first_file.name}' файлын "
+                        f"'{sel_sheet}' хуудасны {header_row_idx + 1}-р мөрийг толгой мөр гэж "
+                        f"тооцлоо — доорх баганын тохиргоог бусад {len(count_files) - 1} файлд "
+                        f"мөн адил хэрэглэнэ. Эхний файлын эхний 5 мөр:"
+                    )
+                else:
+                    st.caption(f"'{sel_sheet}' хуудасны {header_row_idx + 1}-р мөрийг толгой мөр гэж "
+                               f"тооцож уншлаа. Эхний 5 мөр:")
                 st.dataframe(df_import.head(5), use_container_width=True, hide_index=True)
 
                 guesses = guess_count_column_defaults(df_import)
@@ -841,29 +855,49 @@ with tab1:
                 )
 
                 if st.button("📥 Тооллогын хүснэгтэд ачаалах", type="primary", use_container_width=True):
-                    def _num_col(sel):
+                    def _num_col(src_df, sel):
                         if sel == "— Байхгүй (0 / хоосон) —":
-                            return pd.Series(0.0, index=df_import.index)
-                        return pd.to_numeric(df_import[sel], errors="coerce").fillna(0.0)
+                            return pd.Series(0.0, index=src_df.index)
+                        return pd.to_numeric(src_df[sel], errors="coerce").fillna(0.0)
 
-                    def _text_col(sel):
+                    def _text_col(src_df, sel):
                         if sel == "— Байхгүй (0 / хоосон) —":
-                            return pd.Series("", index=df_import.index)
-                        return (df_import[sel].astype(str)
+                            return pd.Series("", index=src_df.index)
+                        return (src_df[sel].astype(str)
                                 .replace({"nan": "", "None": ""}).str.strip())
 
-                    new_df = pd.DataFrame()
-                    new_df["Код"] = df_import[code_sel].apply(clean_code)
-                    new_df["Нэр"] = df_import[name_sel].astype(str).str.strip().replace(
-                        {"nan": "", "None": ""})
-                    new_df["Өглөө"] = _num_col(morning_sel)
-                    new_df["Хүргэлт"] = _num_col(delivery_sel)
-                    new_df["Орой"] = _num_col(evening_sel)
-                    new_df["Тайлбар"] = _text_col(note_sel)
+                    def _extract_one(src_df):
+                        one = pd.DataFrame()
+                        one["Код"] = src_df[code_sel].apply(clean_code)
+                        one["Нэр"] = src_df[name_sel].astype(str).str.strip().replace(
+                            {"nan": "", "None": ""})
+                        one["Өглөө"] = _num_col(src_df, morning_sel)
+                        one["Хүргэлт"] = _num_col(src_df, delivery_sel)
+                        one["Орой"] = _num_col(src_df, evening_sel)
+                        one["Тайлбар"] = _text_col(src_df, note_sel)
+                        # Хоосон нэртэй мөрүүдийг (ж: дэд-нийлбэр, хоосон зай мөр) хасах
+                        one = one[one["Нэр"].str.strip() != ""]
+                        return one.reset_index(drop=True)
 
-                    # Хоосон нэртэй мөрүүдийг (ж: дэд-нийлбэр, хоосон зай мөр) хасах
-                    new_df = new_df[new_df["Нэр"].str.strip() != ""]
-                    new_df = new_df.reset_index(drop=True)
+                    all_new = []
+                    load_errors = []
+                    required_cols = [c for c in [code_sel, name_sel, morning_sel, delivery_sel,
+                                                  evening_sel, note_sel]
+                                      if c != "— Байхгүй (0 / хоосон) —"]
+                    for f in count_files:
+                        try:
+                            f_sheets = list_excel_sheets(f)
+                            f_sheet = sel_sheet if sel_sheet in f_sheets else guess_default_sheet(f_sheets)
+                            f_df, _ = read_excel_with_header_guess(f, f_sheet)
+                            missing = [c for c in required_cols if c not in f_df.columns]
+                            if missing:
+                                raise ValueError(f"багана олдсонгүй: {', '.join(missing)}")
+                            all_new.append(_extract_one(f_df))
+                        except Exception as e:
+                            load_errors.append(f"{f.name}: {e}")
+
+                    new_df = (pd.concat(all_new, ignore_index=True) if all_new
+                              else pd.DataFrame(columns=list(empty_count_row().keys())))
 
                     if load_mode == "Одоогийн хүснэгтийг орлуулах":
                         st.session_state.count_df = new_df
@@ -871,7 +905,12 @@ with tab1:
                         st.session_state.count_df = pd.concat(
                             [st.session_state.count_df, new_df], ignore_index=True
                         )
-                    st.success(f"{len(new_df)} мөр амжилттай ачааллаа. Доорх хүснэгтээс шалгана уу.")
+
+                    if load_errors:
+                        st.warning("Дараах файлуудыг ачаалахад алдаа гарлаа (алгассан):\n" +
+                                   "\n".join(f"- {e}" for e in load_errors))
+                    st.success(f"{len(count_files) - len(load_errors)}/{len(count_files)} файлаас "
+                               f"нийт {len(new_df)} мөр амжилттай ачааллаа. Доорх хүснэгтээс шалгана уу.")
                     st.rerun()
             except Exception as e:
                 st.error(f"Файл уншихад алдаа гарлаа: {e}")
@@ -896,27 +935,46 @@ with tab1:
                 "Хамгийн сайн ажиллах нөхцөл: торон шугам (cell border) тод харагдах "
                 "Excel screenshot. Гар бичмэл эсвэл өнцгөөр гажсан зураг дээр нарийвчлал буурна."
             )
-            ocr_image = st.file_uploader(
-                "Тооллогын хүснэгтийн зураг", type=["png", "jpg", "jpeg"], key="ocr_upload"
+            ocr_images = st.file_uploader(
+                "Тооллогын хүснэгтийн зураг(ууд)", type=["png", "jpg", "jpeg"],
+                accept_multiple_files=True, key="ocr_upload",
             )
 
-            if ocr_image is not None and st.button("🔍 Зургаас унших", key="ocr_run_btn"):
-                progress_bar = st.progress(0.0, text="Зургаас өгөгдөл уншиж байна...")
-                try:
-                    img_bytes = ocr_image.getvalue()
-                    ocr_df = ocr_extract_count_table(
-                        img_bytes,
-                        progress_cb=lambda p: progress_bar.progress(
-                            min(p, 1.0), text=f"Уншиж байна... {int(min(p,1.0)*100)}%"
-                        ),
-                    )
-                    progress_bar.empty()
-                    st.session_state.ocr_preview_df = ocr_df
-                    if len(ocr_df) == 0:
-                        st.warning("Барааны мөр олдсонгүй. Зургаа шалгаад дахин оруулна уу.")
-                except Exception as e:
-                    progress_bar.empty()
-                    st.error(f"Уншихад алдаа гарлаа: {e}")
+            if ocr_images and st.button("🔍 Зургаас унших", key="ocr_run_btn"):
+                total_imgs = len(ocr_images)
+                progress_bar = st.progress(0.0, text="Зургуудаас өгөгдөл уншиж байна...")
+                all_ocr_dfs = []
+                ocr_errors = []
+                for idx, img_file in enumerate(ocr_images):
+                    try:
+                        img_bytes = img_file.getvalue()
+
+                        def _cb(p, idx=idx, name=img_file.name):
+                            combined = (idx + min(p, 1.0)) / total_imgs
+                            progress_bar.progress(
+                                min(combined, 1.0),
+                                text=f"({idx + 1}/{total_imgs}) {name} уншиж байна... "
+                                     f"{int(min(p, 1.0) * 100)}%",
+                            )
+
+                        df_one = ocr_extract_count_table(img_bytes, progress_cb=_cb)
+                        if len(df_one) == 0:
+                            ocr_errors.append(f"{img_file.name}: барааны мөр олдсонгүй")
+                        else:
+                            all_ocr_dfs.append(df_one)
+                    except Exception as e:
+                        ocr_errors.append(f"{img_file.name}: {e}")
+                progress_bar.empty()
+
+                if all_ocr_dfs:
+                    st.session_state.ocr_preview_df = pd.concat(all_ocr_dfs, ignore_index=True)
+                    st.success(f"{len(all_ocr_dfs)}/{total_imgs} зургаас нийт "
+                               f"{sum(len(d) for d in all_ocr_dfs)} мөр уншлаа.")
+                else:
+                    st.session_state.ocr_preview_df = None
+
+                if ocr_errors:
+                    st.warning("Дараах зургуудад анхаарна уу:\n" + "\n".join(f"- {e}" for e in ocr_errors))
 
             preview = st.session_state.get("ocr_preview_df")
             if preview is not None and len(preview) > 0:
@@ -1005,17 +1063,44 @@ with tab1:
     st.subheader("🔄 Системийн Excel-тэй тулгах")
     st.caption("Excel файл нь `Код`/`ID`, `Нэр`(заавал биш) болон **`Qty Sold`** баганатай байх ёстой.")
 
-    sys_file = st.file_uploader("Системийн борлуулалтын Excel файл", type=["xlsx", "xls"], key="sys_upload")
+    sys_files = st.file_uploader(
+        "Системийн борлуулалтын Excel файл(ууд)", type=["xlsx", "xls"],
+        accept_multiple_files=True, key="sys_upload",
+    )
 
-    if sys_file is not None:
+    if sys_files:
         try:
-            df_system = parse_system_excel(sys_file)
-            st.success(f"Системийн файлаас {len(df_system)} мөр амжилттай уншлаа.")
+            sys_frames = []
+            sys_errors = []
+            for f in sys_files:
+                try:
+                    sys_frames.append(parse_system_excel(f))
+                except Exception as e:
+                    sys_errors.append(f"{f.name}: {e}")
+
+            if not sys_frames:
+                raise ValueError("Ямар ч файлыг амжилттай уншиж чадсангүй.")
+
+            # Хэд хэдэн файлд (ж: өөр өөр кассын терминал/POS-с гарсан тайлан) ижил
+            # Код/Нэртэй бараа орж ирвэл тоог нь нэгтгэж нэмнэ.
+            df_system = pd.concat(sys_frames, ignore_index=True)
+            df_system = df_system.groupby(["Код", "Нэр"], as_index=False)["Систем"].sum()
+
+            if len(sys_files) > 1:
+                st.success(f"{len(sys_frames)}/{len(sys_files)} файлаас нийт "
+                           f"{len(df_system)} мөр (Код+Нэрээр нэгтгэсэн) амжилттай уншлаа.")
+            else:
+                st.success(f"Системийн файлаас {len(df_system)} мөр амжилттай уншлаа.")
+
+            if sys_errors:
+                st.warning("Дараах файлуудыг уншихад алдаа гарлаа (алгассан):\n" +
+                           "\n".join(f"- {e}" for e in sys_errors))
+
             if st.button("⚖️ Тулгалт хийх", type="primary", use_container_width=True):
                 reconciled = reconcile(edited_df, df_system)
                 st.session_state.reconciled_df = reconciled
         except Exception as e:
-            st.error(f"Файл уншихад алдаа гарлаа: {e}")
+            st.error(f"Файл(ууд) уншихад алдаа гарлаа: {e}")
 
     if st.session_state.reconciled_df is not None:
         rdf = st.session_state.reconciled_df
